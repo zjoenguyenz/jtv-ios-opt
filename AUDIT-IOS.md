@@ -120,6 +120,7 @@ Consequences:
   - In Home, move `continueWatchingRow` (`HomeView.swift:231`) into its own subview that observes `history`, so only that row re-renders.
 - **Risk:** low. Nothing in those bodies reads history state; check the source-switch resume (`:2609`) still reads the live object.
 - **Verify:** Instruments → SwiftUI "View Body" counts during 5 min of playback, before and after. The exported log is unchanged.
+- **Leader correction (2026-11-23, iOS Swift gate Round 1 on PR 1):** the "zero behaviour" claim above is corrected. The implemented PR's nil-default EnvironmentKey changes the UNREACHABLE missing-injection failure mode: baseline crashes loudly in every build type; the PR asserts in debug and silently skips the save in release (and the resolver's optional read fails silently in all configurations). On every reachable path behaviour is identical — single root injection, traced by the gate — so the honest claim is: **no behaviour change on any reachable path; the unreachable missing-injection failure mode changes from crash to silent no-save.** Recorded invariant (gate Family C): `\.watchHistoryStore` is set ONCE at the App root and never overridden; player-surface closures capture the value from their first body pass, so that set-once property is load-bearing for already-created surfaces — future changes must preserve it. The gate also convicted a real layout delta in PR 1 as first written (empty-history Home gains +24 pt of stack spacing because the split row always occupies a slot); a fix making the row's slot conditional is required before PR 1 can pass — the row's presence in Home's stack must be driven by an observing sensor outside the spaced stack, not by the row's own body.
 
 ### I-5: Non-lazy horizontal rails plus unbounded prefetch — CONFIRMED (cost UNMEASURED) — UI-GATE
 - **Evidence:**
@@ -267,7 +268,7 @@ Judged on reproducibility, per the brief. SDK 26.5 against MinOS 17.0 is normal 
 
 | PR | Closes | Behaviour change | Notes |
 |---|---|---|---|
-| 1 | I-4 (non-observing history in the 3 playback views + Home row split) | NONE | shell only; View-Body counts |
+| 1 | I-4 (non-observing history in the 3 playback views + Home row split) | NONE on any reachable path (see the leader correction under I-4) | shell only; View-Body counts |
 | 2 | I-5 (LazyHStack rails) | NONE (UI-GATE screenshots) | shell only |
 | 3 | I-2 (cancel resolve tasks) | **YES**: approval | shell only |
 | 4 | I-1 (audio session at playback only + deactivate) | **YES**: approval | shell only; device test matrix |
