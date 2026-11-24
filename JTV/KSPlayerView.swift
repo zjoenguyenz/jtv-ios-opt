@@ -58,7 +58,8 @@ struct KSPlayerView: View {
     /// surface, which copies it into the view controller.
     @StateObject private var autosub = AutoSubController(surface: .ks)
 
-    @EnvironmentObject private var history: WatchHistoryManager
+    // I-4: non-observing reference (see JTVApp); this view never reads history state in body.
+    @Environment(\.watchHistory) private var history: WatchHistoryManager?
     @EnvironmentObject private var service: MovieService
     @Environment(\.dismiss) private var dismiss
 
@@ -133,7 +134,7 @@ struct KSPlayerView: View {
             duration: duration,
             updatedAt: Date()
         )
-        history.upsert(record, force: force)
+        history?.upsert(record, force: force)
     }
 }
 

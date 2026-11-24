@@ -45,6 +45,30 @@ enum OrientationHelper {
     }
 }
 
+// MARK: - Non-observing history access (I-4)
+
+/// Environment key carrying the App's one `WatchHistoryManager` as a
+/// plain reference. Unlike `@EnvironmentObject`, reading a class
+/// reference through `@Environment` does NOT subscribe the view to
+/// the object's `@Published` changes, so the playback views can write
+/// progress (and the resolver can read the resume record) without
+/// being re-rendered by every 5-second history save. The App root
+/// sets this once, next to `.environmentObject(history)`, with the
+/// very same instance - reads and writes hit the live manager.
+private struct WatchHistoryEnvironmentKey: EnvironmentKey {
+    static let defaultValue: WatchHistoryManager? = nil
+}
+
+extension EnvironmentValues {
+    /// The shared history manager as a non-observing reference
+    /// (I-4). Nil only outside the App root's environment, which
+    /// never happens for the playback views in the running app.
+    var watchHistory: WatchHistoryManager? {
+        get { self[WatchHistoryEnvironmentKey.self] }
+        set { self[WatchHistoryEnvironmentKey.self] = newValue }
+    }
+}
+
 @main
 struct JTVApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
@@ -73,6 +97,7 @@ struct JTVApp: App {
                 .environmentObject(service)
                 .environmentObject(favorites)
                 .environmentObject(history)
+                .environment(\.watchHistory, history)
                 .environmentObject(presenter)
                 .preferredColorScheme(.dark)
         }

@@ -1934,7 +1934,8 @@ struct PlayerView: View {
     /// surface, which copies it into the view controller.
     @StateObject private var autosub = AutoSubController(surface: .av)
 
-    @EnvironmentObject private var history: WatchHistoryManager
+    // I-4: non-observing reference (see JTVApp); this view never reads history state in body.
+    @Environment(\.watchHistory) private var history: WatchHistoryManager?
     @EnvironmentObject private var service: MovieService
     @Environment(\.dismiss) private var dismiss
 
@@ -2024,7 +2025,7 @@ struct PlayerView: View {
             duration: duration,
             updatedAt: Date()
         )
-        history.upsert(record, force: force)
+        history?.upsert(record, force: force)
     }
 }
 
@@ -2298,7 +2299,8 @@ struct PlaybackResolverView: View {
     let request: PlaybackRequest
 
     @EnvironmentObject private var service: MovieService
-    @EnvironmentObject private var history: WatchHistoryManager
+    // I-4: non-observing reference (see JTVApp); this view never reads history state in body.
+    @Environment(\.watchHistory) private var history: WatchHistoryManager?
     @Environment(\.dismiss) private var dismiss
 
     /// v1.22.4: the request actually being played — a source
@@ -2606,7 +2608,7 @@ struct PlaybackResolverView: View {
         manualSwitchAttempt = true
         var next = activeRequest
         next.episode = episode
-        if let record = history.record(for: activeRequest.pluginId, movieId: activeRequest.movie.id),
+        if let record = history?.record(for: activeRequest.pluginId, movieId: activeRequest.movie.id),
            record.lastPosition > 5 {
             next.startPosition = record.lastPosition
         }
