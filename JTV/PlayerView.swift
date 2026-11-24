@@ -2347,6 +2347,11 @@ struct PlaybackResolverView: View {
     /// Guards against a stale resolve landing after a switch:
     /// only the newest generation may set the phase.
     @State private var resolveGeneration = 0
+    /// I-2 (AUDIT-IOS): the running resolve. Cancelled before a
+    /// new resolve starts (source switch, Thử lại) and when this
+    /// screen disappears, so an abandoned chain stops its work
+    /// and can never land a phase after the user has moved on.
+    @State private var resolveTask: Task<Void, Never>?
 
     init(request: PlaybackRequest) {
         self.request = request
@@ -2485,6 +2490,9 @@ struct PlaybackResolverView: View {
         // sources back upright. Direct sources never create an
         // embed, so they rotated fine.
         .onDisappear {
+            // I-2: the screen closed — stop the in-flight resolve.
+            resolveTask?.cancel()
+            resolveTask = nil
             OrientationHelper.setLock(.portrait)
             OrientationHelper.requestGeometry(.portrait)
         }
@@ -2639,9 +2647,12 @@ struct PlaybackResolverView: View {
     }
 
     private func startResolve() {
+        // I-2: a new resolve supersedes the old one — cancel it
+        // instead of letting it run on in the background.
+        resolveTask?.cancel()
         resolveGeneration += 1
         let generation = resolveGeneration
-        Task { await resolve(generation: generation) }
+        resolveTask = Task { await resolve(generation: generation) }
     }
 
     private func resolve(generation: Int) async {
@@ -2719,14 +2730,18 @@ struct PlaybackResolverView: View {
                 }
             }
             // A source switch during the wait supersedes this run.
-            guard generation == resolveGeneration else { return }
+            // I-2: so does a cancel (screen closed / superseded) —
+            // a result that arrives anyway is dropped.
+            guard generation == resolveGeneration, !Task.isCancelled else { return }
             switch resolution {
             case .video(let stream): phase = .video(stream)
             case .manga(let stream): phase = .manga(stream)
             case .embed(let url, let headers, let sniffMedia): phase = .embed(url, headers, sniffMedia)
             }
         } catch {
-            guard generation == resolveGeneration else { return }
+            // I-2: a cancelled run (screen closed / superseded)
+            // is not a failure — no failure phase, no failure line.
+            guard generation == resolveGeneration, !Task.isCancelled else { return }
             // L-16: the failure this view shows used to be
             // invisible in the log — record the plugin and
             // the error kind beside the resolve chain's own
