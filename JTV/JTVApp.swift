@@ -73,8 +73,32 @@ struct JTVApp: App {
                 .environmentObject(service)
                 .environmentObject(favorites)
                 .environmentObject(history)
+                // I-4: the same WatchHistoryManager, also as a plain
+                // reference for the playback views (see
+                // WatchHistoryStoreKey below).
+                .environment(\.watchHistoryStore, history)
                 .environmentObject(presenter)
                 .preferredColorScheme(.dark)
         }
+    }
+}
+
+/// I-4 (AUDIT-IOS): a NON-observing route to the app's single
+/// WatchHistoryManager. `@Environment` holding a class reference
+/// does not subscribe to the object's objectWillChange, so the
+/// playback views that only WRITE progress (or read it once, in
+/// an action) are no longer re-rendered by every history save.
+/// Screens that DISPLAY history keep `@EnvironmentObject`.
+/// Set once, at the App root, to the same instance the root
+/// injects as an environment object. The default is nil — never
+/// a fresh manager, which would be a second, divergent store.
+private struct WatchHistoryStoreKey: EnvironmentKey {
+    static let defaultValue: WatchHistoryManager? = nil
+}
+
+extension EnvironmentValues {
+    var watchHistoryStore: WatchHistoryManager? {
+        get { self[WatchHistoryStoreKey.self] }
+        set { self[WatchHistoryStoreKey.self] = newValue }
     }
 }

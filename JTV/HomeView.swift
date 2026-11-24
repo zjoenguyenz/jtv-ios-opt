@@ -3,8 +3,17 @@ import SwiftUI
 struct HomeView: View {
     @EnvironmentObject private var plugins: PluginManager
     @EnvironmentObject private var service: MovieService
-    @EnvironmentObject private var history: WatchHistoryManager
     @EnvironmentObject private var presenter: PlaybackPresenter
+    // I-4 fix round: NON-observing reference (see
+    // WatchHistoryStoreKey) — read only to decide whether the
+    // continue-watching slot exists, never to subscribe Home to
+    // every history save.
+    @Environment(\.watchHistoryStore) private var historyStore
+    /// I-4 fix round: bumped by HomeHistoryEmptinessSensor ONLY
+    /// when continue-watching flips empty <-> non-empty. Reading
+    /// it in `content` makes that flip (and nothing else from
+    /// history) re-render Home.
+    @State private var continueWatchingFlips = 0
 
     @State private var sections: [HomeSection] = []
     @State private var sectionItems: [String: [Movie]] = [:]
@@ -99,6 +108,20 @@ struct HomeView: View {
         }
     }
 
+    /// I-4 fix round: whether the spaced stack gets the
+    /// continue-watching slot at all — read live from the manager
+    /// on every Home body pass (so the very first frame and any
+    /// pass after a hidden-tab period are correct), with the
+    /// sensor's flip counter as the only history-driven trigger.
+    private var showsContinueWatchingRow: Bool {
+        _ = continueWatchingFlips
+        guard let historyStore else {
+            assertionFailure("watchHistoryStore not injected")
+            return false
+        }
+        return !historyStore.continueWatching.isEmpty
+    }
+
     private var content: some View {
         VStack(spacing: 0) {
             // Pinned OUTSIDE the vertical scroll view: nested scroll views
@@ -117,7 +140,13 @@ struct HomeView: View {
                     .padding(.top, 40)
                 }
                 heroIfAvailable
-                continueWatchingRow
+                // I-4: the row is its own view so that a history
+                // save re-renders this row only, not the rails. The
+                // slot exists only when the row has records, exactly
+                // like the inlined @ViewBuilder row it replaces.
+                if showsContinueWatchingRow {
+                    HomeContinueWatchingRow()
+                }
                 ForEach(sections) { section in
                     sectionView(section)
                 }
@@ -128,6 +157,11 @@ struct HomeView: View {
                 await plugins.syncAll(silent: true)
                 await loadSections(force: true)
             }
+        }
+        // I-4 fix round: outside the spaced stack, so it never
+        // takes a slot or spacing; a background adds no layout.
+        .background {
+            HomeHistoryEmptinessSensor { continueWatchingFlips += 1 }
         }
     }
 
@@ -225,84 +259,6 @@ struct HomeView: View {
         return nil
     }
 
-    // MARK: - Continue watching
-
-    @ViewBuilder
-    private var continueWatchingRow: some View {
-        let records = history.continueWatching
-        if !records.isEmpty {
-            VStack(alignment: .leading, spacing: 12) {
-                SectionHeader(title: "Đang xem tiếp")
-                    .padding(.horizontal, 16)
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(alignment: .top, spacing: 14) {
-                        ForEach(records) { record in
-                            continueCard(record)
-                        }
-                    }
-                    .padding(.horizontal, 16)
-                }
-            }
-        }
-    }
-
-    private func continueCard(_ record: HistoryRecord) -> some View {
-        NavigationLink(value: AppRoute.movie(MovieRoute(pluginId: record.pluginId, movie: record.movie, autoResume: true))) {
-            VStack(alignment: .leading, spacing: 7) {
-                ZStack(alignment: .bottomLeading) {
-                    CachedAsyncImage(urlString: record.movie.displayBackdrop)
-                        .frame(width: 210, height: 118)
-                        .clipped()
-                    LinearGradient(colors: [.clear, .black.opacity(0.65)], startPoint: .center, endPoint: .bottom)
-                    HStack(spacing: 5) {
-                        Image(systemName: record.isManga ? "book.fill" : "play.circle.fill")
-                        Text(record.episodeName)
-                            .lineLimit(1)
-                    }
-                    .font(.system(size: 11, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white)
-                    .padding(8)
-                    if !record.isManga && record.duration > 0 {
-                        VStack {
-                            Spacer()
-                            GeometryReader { geo in
-                                ZStack(alignment: .leading) {
-                                    Capsule().fill(Color.white.opacity(0.25))
-                                    Capsule().fill(Theme.accent)
-                                        .frame(width: geo.size.width * record.progress)
-                                }
-                            }
-                            .frame(height: 4)
-                        }
-                    }
-                }
-                .frame(width: 210, height: 118)
-                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .strokeBorder(Theme.glassStroke, lineWidth: 1)
-                )
-
-                Text(record.movie.title)
-                    .font(.system(size: 12.5, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
-                    .frame(width: 210, alignment: .leading)
-                Text(record.pluginName)
-                    .font(.system(size: 10.5, design: .rounded))
-                    .foregroundStyle(Theme.textFaint)
-            }
-        }
-        .buttonStyle(.plain)
-        .contextMenu {
-            Button(role: .destructive) {
-                history.remove(record)
-            } label: {
-                Label("Xoá khỏi đang xem tiếp", systemImage: "trash")
-            }
-        }
-    }
-
     // MARK: - Sections
 
     @ViewBuilder
@@ -382,5 +338,110 @@ struct HomeView: View {
         }
         guard pluginId == pid else { return }
         homeCache[pid] = HomeCacheEntry(sections: sections, items: sectionItems, loadedAt: Date())
+    }
+}
+
+// MARK: - Continue watching
+
+/// I-4 (AUDIT-IOS): the "Đang xem tiếp" row, split out of
+/// HomeView unchanged. It is the only part of Home that reads
+/// watch history, so it alone observes WatchHistoryManager: a
+/// progress save (every 5 s during playback) now re-renders
+/// this row instead of the whole Home screen with its rails.
+private struct HomeContinueWatchingRow: View {
+    @EnvironmentObject private var history: WatchHistoryManager
+
+    var body: some View {
+        let records = history.continueWatching
+        if !records.isEmpty {
+            VStack(alignment: .leading, spacing: 12) {
+                SectionHeader(title: "Đang xem tiếp")
+                    .padding(.horizontal, 16)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(alignment: .top, spacing: 14) {
+                        ForEach(records) { record in
+                            continueCard(record)
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                }
+            }
+        }
+    }
+
+    private func continueCard(_ record: HistoryRecord) -> some View {
+        NavigationLink(value: AppRoute.movie(MovieRoute(pluginId: record.pluginId, movie: record.movie, autoResume: true))) {
+            VStack(alignment: .leading, spacing: 7) {
+                ZStack(alignment: .bottomLeading) {
+                    CachedAsyncImage(urlString: record.movie.displayBackdrop)
+                        .frame(width: 210, height: 118)
+                        .clipped()
+                    LinearGradient(colors: [.clear, .black.opacity(0.65)], startPoint: .center, endPoint: .bottom)
+                    HStack(spacing: 5) {
+                        Image(systemName: record.isManga ? "book.fill" : "play.circle.fill")
+                        Text(record.episodeName)
+                            .lineLimit(1)
+                    }
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+                    .padding(8)
+                    if !record.isManga && record.duration > 0 {
+                        VStack {
+                            Spacer()
+                            GeometryReader { geo in
+                                ZStack(alignment: .leading) {
+                                    Capsule().fill(Color.white.opacity(0.25))
+                                    Capsule().fill(Theme.accent)
+                                        .frame(width: geo.size.width * record.progress)
+                                }
+                            }
+                            .frame(height: 4)
+                        }
+                    }
+                }
+                .frame(width: 210, height: 118)
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .strokeBorder(Theme.glassStroke, lineWidth: 1)
+                )
+
+                Text(record.movie.title)
+                    .font(.system(size: 12.5, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .frame(width: 210, alignment: .leading)
+                Text(record.pluginName)
+                    .font(.system(size: 10.5, design: .rounded))
+                    .foregroundStyle(Theme.textFaint)
+            }
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button(role: .destructive) {
+                history.remove(record)
+            } label: {
+                Label("Xoá khỏi đang xem tiếp", systemImage: "trash")
+            }
+        }
+    }
+}
+
+/// I-4 fix round: the one observer of history that Home owns.
+/// It re-renders on every save (cheap: an invisible clear view)
+/// and calls `onFlip` only when continue-watching changes
+/// between empty and non-empty, so HomeView itself re-renders
+/// on that flip and on nothing else history does.
+private struct HomeHistoryEmptinessSensor: View {
+    @EnvironmentObject private var history: WatchHistoryManager
+    let onFlip: () -> Void
+
+    var body: some View {
+        Color.clear
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+            .onChange(of: history.continueWatching.isEmpty) { _, _ in
+                onFlip()
+            }
     }
 }

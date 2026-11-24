@@ -58,11 +58,16 @@ struct KSPlayerView: View {
     /// surface, which copies it into the view controller.
     @StateObject private var autosub = AutoSubController(surface: .ks)
 
-    @EnvironmentObject private var history: WatchHistoryManager
+    // I-4: non-observing — this view only writes progress, so a
+    // history save must not re-render it (see WatchHistoryStoreKey).
+    @Environment(\.watchHistoryStore) private var history
     @EnvironmentObject private var service: MovieService
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
+        // I-4: resolved once per body pass and captured by the
+        // progress closures (same reasoning as PlayerView).
+        let historyStore = history
         ZStack {
             Color.black.ignoresSafeArea()
             if let url = stream.streamURL {
@@ -86,8 +91,8 @@ struct KSPlayerView: View {
                               case .video(let fresh) = resolution else { return nil }
                         return fresh
                     },
-                    onProgress: { save(position: $0, duration: $1, force: false) },
-                    onExit: { save(position: $0, duration: $1, force: true) },
+                    onProgress: { save(position: $0, duration: $1, force: false, into: historyStore) },
+                    onExit: { save(position: $0, duration: $1, force: true, into: historyStore) },
                     subtitles: stream.subtitles,
                     autosub: autosub
                 )
@@ -114,7 +119,13 @@ struct KSPlayerView: View {
         .statusBarHidden(true)
     }
 
-    private func save(position: Double, duration: Double, force: Bool) {
+    private func save(position: Double, duration: Double, force: Bool,
+                      into store: WatchHistoryManager?) {
+        // I-4: see PlayerView.save — nil means a lost injection.
+        guard let store else {
+            assertionFailure("watchHistoryStore not injected")
+            return
+        }
         // SPEC-136 §2.6: a fallback-served play is recorded
         // under the ORIGIN identity (historyRequest) with an
         // EMPTY streamURL; every other play is byte-identical
@@ -133,7 +144,7 @@ struct KSPlayerView: View {
             duration: duration,
             updatedAt: Date()
         )
-        history.upsert(record, force: force)
+        store.upsert(record, force: force)
     }
 }
 
