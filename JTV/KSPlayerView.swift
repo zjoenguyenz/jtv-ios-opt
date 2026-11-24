@@ -177,6 +177,7 @@ struct KSVideoPlayerSurface: UIViewControllerRepresentable {
     }
 
     func makeUIViewController(context: Context) -> KSPlayerSurfaceViewController {
+        PlaybackAudioScope.surfaceDidMake()  // I-1
         OrientationHelper.setLock(.allButUpsideDown)
         let controller = KSPlayerSurfaceViewController()
         controller.contentURL = url
@@ -210,6 +211,7 @@ struct KSVideoPlayerSurface: UIViewControllerRepresentable {
     static func dismantleUIViewController(_ controller: KSPlayerSurfaceViewController, coordinator: Coordinator) {
         coordinator.reportExit()
         controller.teardown()
+        PlaybackAudioScope.surfaceDidDismantle()  // I-1: after the stop
     }
 
     final class Coordinator {
