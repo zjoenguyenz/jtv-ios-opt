@@ -1934,11 +1934,18 @@ struct PlayerView: View {
     /// surface, which copies it into the view controller.
     @StateObject private var autosub = AutoSubController(surface: .av)
 
-    @EnvironmentObject private var history: WatchHistoryManager
+    // I-4: non-observing — this view only writes progress, so a
+    // history save must not re-render it (see WatchHistoryStoreKey).
+    @Environment(\.watchHistoryStore) private var history
     @EnvironmentObject private var service: MovieService
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
+        // I-4: resolved once per body pass and captured by the
+        // progress closures, so the coordinator's later calls
+        // (including the forced save at dismantle) always reach
+        // the live manager, never an uninstalled-view read.
+        let historyStore = history
         ZStack {
             Color.black.ignoresSafeArea()
             if let url = stream.streamURL {
@@ -1965,8 +1972,8 @@ struct PlayerView: View {
                               case .video(let fresh) = resolution else { return nil }
                         return fresh
                     },
-                    onProgress: { save(position: $0, duration: $1, force: false) },
-                    onExit: { save(position: $0, duration: $1, force: true) },
+                    onProgress: { save(position: $0, duration: $1, force: false, into: historyStore) },
+                    onExit: { save(position: $0, duration: $1, force: true, into: historyStore) },
                     subtitles: stream.subtitles,
                     autosub: autosub
                 )
@@ -2005,7 +2012,14 @@ struct PlayerView: View {
             .joined(separator: " · ")
     }
 
-    private func save(position: Double, duration: Double, force: Bool) {
+    private func save(position: Double, duration: Double, force: Bool,
+                      into store: WatchHistoryManager?) {
+        // I-4: the store is injected once at the App root; a nil
+        // here means the injection was lost (a wiring defect).
+        guard let store else {
+            assertionFailure("watchHistoryStore not injected")
+            return
+        }
         // SPEC-136 §2.6: a fallback-served play is recorded
         // under the ORIGIN identity (historyRequest) with an
         // EMPTY streamURL; every other play is byte-identical
@@ -2024,7 +2038,7 @@ struct PlayerView: View {
             duration: duration,
             updatedAt: Date()
         )
-        history.upsert(record, force: force)
+        store.upsert(record, force: force)
     }
 }
 
@@ -2298,7 +2312,9 @@ struct PlaybackResolverView: View {
     let request: PlaybackRequest
 
     @EnvironmentObject private var service: MovieService
-    @EnvironmentObject private var history: WatchHistoryManager
+    // I-4: non-observing — the resolver only reads history once,
+    // in switchSource, from the live manager this key carries.
+    @Environment(\.watchHistoryStore) private var history
     @Environment(\.dismiss) private var dismiss
 
     /// v1.22.4: the request actually being played — a source
@@ -2606,7 +2622,7 @@ struct PlaybackResolverView: View {
         manualSwitchAttempt = true
         var next = activeRequest
         next.episode = episode
-        if let record = history.record(for: activeRequest.pluginId, movieId: activeRequest.movie.id),
+        if let record = history?.record(for: activeRequest.pluginId, movieId: activeRequest.movie.id),
            record.lastPosition > 5 {
             next.startPosition = record.lastPosition
         }
