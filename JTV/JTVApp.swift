@@ -61,9 +61,12 @@ struct JTVApp: App {
         _favorites = StateObject(wrappedValue: FavoritesManager())
         _history = StateObject(wrappedValue: WatchHistoryManager())
         _presenter = StateObject(wrappedValue: PlaybackPresenter())
-
-        // Allow background / PiP audio playback for the video player.
-        AudioSession.configureForPlayback()
+        // I-1 (AUDIT-IOS): no audio-session work at launch any
+        // more — activating .playback here stopped other apps'
+        // audio the moment JTV opened. Each playback surface
+        // configures the session when it loads, and
+        // PlaybackAudioScope hands it back when the player
+        // screen closes.
     }
 
     var body: some Scene {

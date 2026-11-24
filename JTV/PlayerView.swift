@@ -62,6 +62,7 @@ struct VideoPlayerSurface: UIViewControllerRepresentable {
     }
 
     func makeUIViewController(context: Context) -> PlayerSurfaceViewController {
+        PlaybackAudioScope.surfaceDidMake()  // I-1
         // Playback may rotate; the rest of the app may not. The
         // surface owns the lock: opened here, restored in dismantle
         // (the one callback that only runs when the player screen
@@ -175,6 +176,7 @@ struct VideoPlayerSurface: UIViewControllerRepresentable {
         // No orientation restore here: the resolver screen owns it
         // (its onDisappear is the one signal that always means the
         // player screen closed).
+        PlaybackAudioScope.surfaceDidDismantle()  // I-1: after the pause
     }
 
     /// Swift 6: this coordinator only ever runs on the main actor
@@ -2162,6 +2164,12 @@ private struct EmbedWebView: UIViewControllerRepresentable {
     }
 
     func makeUIViewController(context: Context) -> EmbedHostViewController {
+        // I-1: a web embed may play its own audio, which used to
+        // run under the .playback session activated at launch —
+        // keep that by configuring it here, as the native
+        // surfaces do when they load.
+        AudioSession.configureForPlayback()
+        PlaybackAudioScope.surfaceDidMake()
         // The embed surface owns the orientation lock, exactly
         // like the native one: opened here, restored in dismantle.
         OrientationHelper.setLock(.allButUpsideDown)
@@ -2215,6 +2223,7 @@ private struct EmbedWebView: UIViewControllerRepresentable {
         // No orientation restore here either: promotion to the
         // native player dismantles this surface too, and the
         // resolver owns the restore for the whole screen.
+        PlaybackAudioScope.surfaceDidDismantle()  // I-1
     }
 
     final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
@@ -2476,6 +2485,7 @@ struct PlaybackResolverView: View {
             }
         }
         .task {
+            PlaybackAudioScope.coverDidOpen()  // I-1
             startResolve()
         }
         // Orientation restore lives HERE and only here. Nothing
@@ -2493,6 +2503,9 @@ struct PlaybackResolverView: View {
             // I-2: the screen closed — stop the in-flight resolve.
             resolveTask?.cancel()
             resolveTask = nil
+            // I-1: the player screen closed — the audio session is
+            // handed back once the last surface is gone too.
+            PlaybackAudioScope.coverDidClose()
             OrientationHelper.setLock(.portrait)
             OrientationHelper.requestGeometry(.portrait)
         }
