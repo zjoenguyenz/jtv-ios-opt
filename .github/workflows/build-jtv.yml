@@ -1,8 +1,10 @@
 name: Build JTV IPA
 
-# Manual dispatch ONLY (budget rule — never build on push).
+# Manual dispatch + pull_request (copy repo only — PR CI for the
+# optimisation engagement; production keeps dispatch-only per budget rule).
 on:
   workflow_dispatch:
+  pull_request:
 
 jobs:
   build:
