@@ -2622,6 +2622,13 @@ struct PlaybackResolverView: View {
         manualSwitchAttempt = true
         var next = activeRequest
         next.episode = episode
+        // I-4 fix round: the same nil policy as PlayerView /
+        // KSPlayerView.save — a nil store is a lost injection:
+        // assert in debug; in release the switch proceeds without
+        // the resume position (the only thing history supplies).
+        if history == nil {
+            assertionFailure("watchHistoryStore not injected")
+        }
         if let record = history?.record(for: activeRequest.pluginId, movieId: activeRequest.movie.id),
            record.lastPosition > 5 {
             next.startPosition = record.lastPosition
