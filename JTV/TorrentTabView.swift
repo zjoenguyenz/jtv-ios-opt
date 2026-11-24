@@ -134,12 +134,25 @@ struct TorrentTabView: View {
                     .padding(.horizontal, 16)
                 } else {
                     ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(alignment: .top, spacing: 13) {
-                            ForEach(items) { movie in
-                                NavigationLink(value: AppRoute.movie(MovieRoute(pluginId: pluginId, movie: movie))) {
-                                    MovieCard(movie: movie)
+                        // I-5: the cards (poster task, NavigationLink)
+                        // are built lazily; the hidden sizer row
+                        // beneath keeps the rail's height and scroll
+                        // width exactly what the eager HStack gave
+                        // (see MovieCardRailSizer).
+                        ZStack(alignment: .topLeading) {
+                            HStack(alignment: .top, spacing: 13) {
+                                ForEach(items) { movie in
+                                    MovieCardRailSizer(movie: movie)
                                 }
-                                .buttonStyle(.plain)
+                            }
+                            .hidden()
+                            LazyHStack(alignment: .top, spacing: 13) {
+                                ForEach(items) { movie in
+                                    NavigationLink(value: AppRoute.movie(MovieRoute(pluginId: pluginId, movie: movie))) {
+                                        MovieCard(movie: movie)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
                             }
                         }
                         .padding(.horizontal, 16)

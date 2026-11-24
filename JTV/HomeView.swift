@@ -286,12 +286,25 @@ struct HomeView: View {
                     .padding(.horizontal, 16)
                 } else {
                     ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(alignment: .top, spacing: 13) {
-                            ForEach(items) { movie in
-                                NavigationLink(value: AppRoute.movie(MovieRoute(pluginId: pluginId, movie: movie))) {
-                                    MovieCard(movie: movie)
+                        // I-5: the cards (poster task, NavigationLink)
+                        // are built lazily; the hidden sizer row
+                        // beneath keeps the rail's height and scroll
+                        // width exactly what the eager HStack gave
+                        // (see MovieCardRailSizer).
+                        ZStack(alignment: .topLeading) {
+                            HStack(alignment: .top, spacing: 13) {
+                                ForEach(items) { movie in
+                                    MovieCardRailSizer(movie: movie)
                                 }
-                                .buttonStyle(.plain)
+                            }
+                            .hidden()
+                            LazyHStack(alignment: .top, spacing: 13) {
+                                ForEach(items) { movie in
+                                    NavigationLink(value: AppRoute.movie(MovieRoute(pluginId: pluginId, movie: movie))) {
+                                        MovieCard(movie: movie)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
                             }
                         }
                         .padding(.horizontal, 16)
@@ -443,5 +456,47 @@ private struct HomeHistoryEmptinessSensor: View {
             .onChange(of: history.continueWatching.isEmpty) { _, _ in
                 onFlip()
             }
+    }
+}
+
+/// I-5 (AUDIT-IOS): layout twin of `MovieCard` (Theme.swift)
+/// for the horizontal rails. An eager HStack sized each rail to
+/// its TALLEST card (titles wrap to 1 or 2 lines; the year/lang
+/// line can be empty); a LazyHStack only measures the cards it
+/// has built, so on its own the rail could open shorter and
+/// grow while scrolling. Laid out hidden under the lazy row,
+/// this twin restores the eager height and width without the
+/// expensive parts (poster load task, badges, NavigationLink).
+/// It MUST mirror MovieCard's size-determining layout: fixed
+/// 118 x 177 poster frame, the same VStack spacing, title
+/// font / lineLimit / frame and meta line. If MovieCard's text
+/// layout changes, change this too.
+struct MovieCardRailSizer: View {
+    let movie: Movie
+    var width: CGFloat = 118
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Color.clear
+                .frame(width: width, height: width * 1.5)
+
+            Text(movie.title)
+                .font(.system(size: 12.5, weight: .semibold, design: .rounded))
+                .lineLimit(2)
+                .frame(width: width, alignment: .leading)
+
+            HStack(spacing: 5) {
+                if movie.year > 0 {
+                    Text(String(movie.year))
+                }
+                if !movie.lang.isEmpty {
+                    Text(movie.lang)
+                }
+            }
+            .font(.system(size: 10.5, weight: .medium, design: .rounded))
+            .frame(width: width, alignment: .leading)
+        }
+        .frame(width: width)
+        .accessibilityHidden(true)
     }
 }

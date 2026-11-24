@@ -633,6 +633,13 @@ final class ImageCacheManager: @unchecked Sendable {
     /// ladder ENTRIES, not completed failures — see the
     /// breaker site in fetchBytesWithFallback.
     private var hostLadderEntries: [String: Int] = [:]
+    /// I-5 (AUDIT-IOS): prefetch pending queue + active count,
+    /// guarded by `lock` like inFlight. At most
+    /// `prefetchWorkers` prefetch loads run at once (the tvOS
+    /// bound); visible-card loads via loadImage are not counted.
+    private var prefetchQueue: [(urlString: String, headers: [String: String], key: String)] = []
+    private var prefetchActive = 0
+    private static let prefetchWorkers = 3
     private let lock = NSLock()
     /// v1.22 disk tier (~300 MB, LRU by modification date): every
     /// cold launch used to re-download every poster — the memory
@@ -855,9 +862,55 @@ final class ImageCacheManager: @unchecked Sendable {
     /// (rails after a section lands, the manga reader's next
     /// pages). Deduped against the cache and in-flight loads.
     func prefetch(urlStrings: [String], headers: [String: String] = [:]) {
-        for urlString in urlStrings.prefix(60) {
-            if cachedImage(for: urlString, headers: headers) != nil { continue }
-            Task { _ = await self.loadImage(urlString: urlString, headers: headers) }
+        // I-5 (AUDIT-IOS): the same URLs as before (first 60 of
+        // each call, already-cached ones skipped) now go through
+        // a pending queue drained by at most `prefetchWorkers`
+        // concurrent loads — the BOUND ported from the tvOS
+        // ImageCacheManager. Unlike tvOS, a new call does NOT
+        // replace the queue: nothing a caller asked for is
+        // dropped. The new batch goes to the FRONT (in its own
+        // order) so the latest caller — e.g. the manga reader's
+        // next pages — is not stuck behind older Home rails.
+        lock.withLock {
+            var batch: [(urlString: String, headers: [String: String], key: String)] = []
+            var batchKeys = Set<String>()
+            for urlString in urlStrings.prefix(60) {
+                let k = key(for: urlString, headers: headers)
+                if cache.object(forKey: k as NSString) != nil { continue }
+                if !batchKeys.insert(k).inserted { continue }
+                batch.append((urlString, headers, k))
+            }
+            guard !batch.isEmpty else { return }
+            prefetchQueue.removeAll { batchKeys.contains($0.key) }
+            prefetchQueue.insert(contentsOf: batch, at: 0)
+        }
+        pumpPrefetch()
+    }
+
+    /// I-5: claims pending items under the lock (never awaiting
+    /// while holding it) and starts their loads; each finished
+    /// load frees its slot and re-pumps. Entries that became
+    /// cached or in flight (e.g. a visible card started them)
+    /// since enqueue are dropped without consuming a slot —
+    /// loadImage's own in-flight dedupe would have joined them.
+    private func pumpPrefetch() {
+        while true {
+            let item: (urlString: String, headers: [String: String], key: String)? = lock.withLock {
+                while prefetchActive < Self.prefetchWorkers, !prefetchQueue.isEmpty {
+                    let next = prefetchQueue.removeFirst()
+                    if cache.object(forKey: next.key as NSString) != nil { continue }
+                    if inFlight[next.key] != nil { continue }
+                    prefetchActive += 1
+                    return next
+                }
+                return nil
+            }
+            guard let item else { return }
+            Task {
+                _ = await self.loadImage(urlString: item.urlString, headers: item.headers)
+                self.lock.withLock { self.prefetchActive -= 1 }
+                self.pumpPrefetch()
+            }
         }
     }
 
